@@ -129,3 +129,12 @@ Open an issue or pull request with a synthetic example that reproduces the reque
 ## License
 
 The software is licensed under Apache-2.0. See [LICENSE](LICENSE).
+## Changes in 0.7.0
+
+For categorical tasks without a spatial layout, call `audit_sequence_contexts` with keyword arguments `probabilities`, `replicated_pairs`, and `fit_through`. Omitting `coordinates` skips the distance summaries and preserves the alphabet from the probability columns, even when a category is absent from the data. For direct simulation summaries, pass `categories=K` to `posterior_predictive_checks`.
+
+`rolling_forecasts(choices, fit_forecast, origins, width, categories=K)` calls a fitting function with the prefix for each origin. The returned forecasting callable supplies probabilities for choices 2 through the end of its input, using only preceding responses. The report keeps origin-specific intervals and records the suffix perturbation checks. Overlapping windows are sensitivity checks.
+
+The optional `plot` extra provides Matplotlib for `plot_repeat_check`. Core evaluation uses NumPy and SciPy. The C++ conditional-logit likelihood backend and R-based research examples are optional.
+
+From a source checkout, run `uv run --frozen pytest -q`. A released wheel is installable with standard `pip install`.

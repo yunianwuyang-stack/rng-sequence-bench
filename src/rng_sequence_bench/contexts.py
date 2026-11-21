@@ -14,9 +14,9 @@ def _repeat_probabilities(probabilities, previous):
 
 def audit_sequence_contexts(
     choices,
-    coordinates,
-    probabilities,
-    replicated_pairs: Iterable,
+    coordinates=None,
+    probabilities=None,
+    replicated_pairs: Iterable = (),
     *,
     fit_through,
     initial_transitions=9,
@@ -24,7 +24,9 @@ def audit_sequence_contexts(
 ):
     """Compare observed-history forecasts with paired suffixes from two starts.
 
-    Choices are integer (participants, trials) arrays in coordinate-row order.
+    Choices are integer (participants, trials) arrays in probability-column order.
+    Optional coordinates must use that same order. Without them, only geometry
+    summaries are omitted.
     Probability row zero predicts choice index one from the first observed choice.
     Subsequent rows predict each next choice using preceding observed choices.
     Supply an iterable of (uniform-start, observed-prefix) replicate pairs. Each
@@ -35,16 +37,14 @@ def audit_sequence_contexts(
     """
     y = np.asarray(choices)
     p = np.asarray(probabilities, dtype=float)
-    coords = np.asarray(coordinates, dtype=float)
-    if y.ndim != 2 or not len(y) or coords.ndim != 2:
-        raise ValueError("Choices and coordinates must be nonempty two-dimensional arrays")
-    if p.shape != (y.shape[0], y.shape[1] - 1, len(coords)):
+    if y.ndim != 2 or not len(y) or not np.issubdtype(y.dtype, np.integer):
+        raise ValueError("Provide a nonempty matrix of integer choices")
+    if p.ndim != 3 or p.shape[:2] != (len(y), y.shape[1] - 1) or p.shape[-1] < 2:
         raise ValueError("Provide one probability row for each choice after the first")
     if not 2 <= fit_through < y.shape[1] - 2:
         raise ValueError("The fitted prefix needs two choices and the suffix needs three")
     if not 1 <= initial_transitions < y.shape[1] - fit_through - 1:
         raise ValueError("The initial transition count must leave later suffix transitions")
-    forecast = forecast_diagnostics(p[:, fit_through - 1 :], y[:, fit_through:])
     if (
         y.min() < 0
         or y.max() >= p.shape[-1]
@@ -53,6 +53,7 @@ def audit_sequence_contexts(
         or not np.allclose(p.sum(axis=-1), 1, rtol=0, atol=1e-8)
     ):
         raise ValueError("Invalid prefix choices or probability rows")
+    forecast = forecast_diagnostics(p[:, fit_through - 1 :], y[:, fit_through:])
     rng = np.random.default_rng(seed)
     observed = y[:, 1:] == y[:, :-1]
     predicted = _repeat_probabilities(p, y[:, :-1])
@@ -81,6 +82,8 @@ def audit_sequence_contexts(
             [diff[:, :initial_transitions].mean(), diff[:, initial_transitions:].mean()]
         )
     future = y[:, fit_through:]
+    if not reset:
+        raise ValueError("Provide at least one pair of simulated suffixes")
     return {
         "fit_through": fit_through,
         "suffix_length": future.shape[1],
@@ -88,8 +91,8 @@ def audit_sequence_contexts(
         "holdout_forecasts": forecast,
         "holdout_scores_ci": interval(scores(p[:, fit_through - 1 :], future), rng),
         "observed_history_repetition": segments,
-        "uniform_start": posterior_predictive_checks(future, reset, coords),
-        "observed_prefix": posterior_predictive_checks(future, prefixed, coords),
+        "uniform_start": posterior_predictive_checks(future, reset, coordinates, categories=p.shape[-1]),
+        "observed_prefix": posterior_predictive_checks(future, prefixed, coordinates, categories=p.shape[-1]),
         "uniform_minus_prefix_repeat": {
             "initial_transitions": initial_transitions,
             "median": np.median(early_late, axis=0).tolist(),
@@ -122,3 +125,32 @@ def check_forecast_causality(forecast, choices, fit_through, categories):
         ):
             raise ValueError(f"Forecast depends on responses at or after trial {index + 1}")
     return {"altered_trials": [index + 1 for index in changes]}
+
+
+def rolling_forecasts(choices, fit_forecast, origins, width, *, categories, seed=0):
+    """Refit at each chronological origin and score its following fixed window.
+
+    The callback sees a copy of the fitting prefix and returns a function that
+    predicts every choice after the first on the supplied observed histories.
+    The origin-specific windows may overlap. Results retain separate intervals.
+    """
+    y = np.asarray(choices)
+    if y.ndim != 2 or not len(y) or width < 1 or categories < 2:
+        raise ValueError("Provide a choice matrix and positive validation width")
+    if not np.issubdtype(y.dtype, np.integer) or y.min() < 0 or y.max() >= categories:
+        raise ValueError("Choices must be integer indices within the alphabet")
+    rng = np.random.default_rng(seed)
+    results = {}
+    for origin in origins:
+        if origin in results or not 2 <= origin <= y.shape[1] - width:
+            raise ValueError("Each origin must uniquely identify a full validation window")
+        forecast = fit_forecast(y[:, :origin].copy())
+        window = y[:, :origin + width]
+        checks = check_forecast_causality(forecast, window, origin, categories)
+        probability = np.asarray(forecast(window))[:, origin - 1:]
+        future = window[:, origin:]
+        results[origin] = {"score_trials": [origin + 1, origin + width],
+                           "diagnostics": forecast_diagnostics(probability, future),
+                           "scores_ci": interval(scores(probability, future), rng),
+                           "causality": checks}
+    return results

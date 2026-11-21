@@ -19,22 +19,24 @@ def recurrence_distribution(sequences, category_count):
     return (counts / counts.sum()).tolist() if counts.sum() else None
 
 
-def predictive_profile(sequences, coordinates):
-    aggregate, tv = trajectory_summary(sequences, coordinates)
+def predictive_profile(sequences, coordinates=None, *, categories=None):
+    aggregate, tv = trajectory_summary(sequences, coordinates, categories=categories)
+    k = len(aggregate["transition"])
     repeat = (sequences[:, 1:] == sequences[:, :-1]).mean(axis=1)
     aggregate["repeat_gap_distribution"] = recurrence_distribution(
-        sequences, len(coordinates)
+        sequences, k
     )
     joint = np.bincount(
-        (sequences[:, :-1] * len(coordinates) + sequences[:, 1:]).ravel(),
-        minlength=len(coordinates) ** 2,
+        (sequences[:, :-1] * k + sequences[:, 1:]).ravel(),
+        minlength=k ** 2,
     )
     aggregate["transition_joint"] = (
-        (joint / joint.sum()).reshape(len(coordinates), len(coordinates)).tolist()
+        (joint / joint.sum()).reshape(k, k).tolist()
     )
-    proportions = (sequences[:, :, None] == np.arange(len(coordinates))).mean(axis=1)
+    proportions = (sequences[:, :, None] == np.arange(k)).mean(axis=1)
     aggregate["mean_digit_share"] = proportions.mean(axis=0).tolist()
-    aggregate["mean_nonrepeat_distance"] = conditional_distance(sequences, coordinates)
+    if coordinates is not None:
+        aggregate["mean_nonrepeat_distance"] = conditional_distance(sequences, coordinates)
     return aggregate, tv, repeat
 
 
@@ -47,7 +49,7 @@ def conditional_distance(sequences, coordinates):
     return float(distances[nonrepeat].mean()) if nonrepeat.any() else None
 
 
-def posterior_predictive_checks(observed, replicated, coordinates):
+def posterior_predictive_checks(observed, replicated, coordinates=None, *, categories=None):
     """Summarize comparable observed and posterior-replicated populations.
 
     Draws must retain the pairing and dimensions of the observed people.
@@ -56,8 +58,8 @@ def posterior_predictive_checks(observed, replicated, coordinates):
     independent hypothesis tests across statistics or participants.
     """
     observed = np.asarray(observed)
-    coordinates = np.asarray(coordinates)
-    ref, tv_obs, r_obs = predictive_profile(observed, coordinates)
+    ref, tv_obs, r_obs = predictive_profile(observed, coordinates, categories=categories)
+    k = len(ref["transition"])
     static = {"tv_quantiles", "squared_distances", "run_lengths"}
     aggregates = {key: [] for key in ref.keys() - static}
     tv_people, repeat_people = [], []
@@ -66,7 +68,7 @@ def posterior_predictive_checks(observed, replicated, coordinates):
         simulated = np.asarray(generated)
         if simulated.shape != observed.shape:
             raise ValueError("Replicated and observed populations must match")
-        sample, tv, rep = predictive_profile(simulated, coordinates)
+        sample, tv, rep = predictive_profile(simulated, coordinates, categories=k)
         tv_people.append(tv)
         repeat_people.append(rep)
         for key, group in aggregates.items():
@@ -115,7 +117,7 @@ def posterior_predictive_checks(observed, replicated, coordinates):
         "participants": len(observed),
         "length": observed.shape[1],
         "index": {
-            **{key: ref[key] for key in sorted(static)},
+            **{key: ref[key] for key in sorted(static & ref.keys())},
             "gap_left_edges": list(GAP_EDGES),
         },
         "statistics": checks,

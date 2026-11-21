@@ -6,7 +6,7 @@ from scipy.special import xlogy
 TV_QUANTILES = (0.50, 0.90, 0.95, 0.99)
 
 
-def trajectory_summary(choices, coordinates, reference=None):
+def trajectory_summary(choices, coordinates=None, reference=None, *, categories=None):
     """Summarize equal-length trajectories indexed by zero-based choices.
 
     Distances use Euclidean geometry. The entropy is the pooled first-order
@@ -14,14 +14,22 @@ def trajectory_summary(choices, coordinates, reference=None):
     distribution defining the target for total variation.
     """
     sequences = np.asarray(choices)
-    coords = np.asarray(coordinates, dtype=float)
     if sequences.ndim != 2 or sequences.shape[0] < 1 or sequences.shape[1] < 2:
         raise ValueError("Provide at least one sequence with at least two trials")
-    if coords.ndim != 2 or len(coords) < 2 or not np.isfinite(coords).all():
+    coords = None if coordinates is None else np.asarray(coordinates, dtype=float)
+    if coords is not None and (coords.ndim != 2 or not coords.shape[1] or not np.isfinite(coords).all()):
         raise ValueError(
             "Provide a finite coordinates matrix with one row per category"
         )
-    k = len(coords)
+    if categories is None:
+        categories = len(coords) if coords is not None else (
+            len(reference) if reference is not None else int(sequences.max()) + 1
+        )
+    if not isinstance(categories, (int, np.integer)) or categories < 2 or (
+        coords is not None and len(coords) != categories
+    ):
+        raise ValueError("Specify the size of the category alphabet")
+    k = categories
     if (
         not np.issubdtype(sequences.dtype, np.integer)
         or sequences.min() < 0
@@ -64,12 +72,7 @@ def trajectory_summary(choices, coordinates, reference=None):
         transition, totals, out=np.zeros((k, k)), where=totals > 0
     )
     entropy = -xlogy(probabilities, probabilities).sum(axis=1) / np.log(2)
-    squared = np.round(((coords[:, None] - coords[None, :]) ** 2).sum(axis=-1), 12)
-    distance_levels, inverse = np.unique(squared, return_inverse=True)
-    transitions_per_distance = np.bincount(
-        inverse.reshape(k, k)[earlier, later].ravel(), minlength=len(distance_levels)
-    )
-    return {
+    summary = {
         "tv_mean": float(tv.mean()),
         "tv_sd": float(tv.std(ddof=1)) if len(tv) > 1 else None,
         "tv_quantiles": list(TV_QUANTILES),
@@ -78,15 +81,20 @@ def trajectory_summary(choices, coordinates, reference=None):
         "repeat_sd": float(per_person_repeat.std(ddof=1)) if len(tv) > 1 else None,
         "run_lengths": [2, 3, 4],
         "run_survival": runs,
-        "squared_distances": distance_levels.tolist(),
-        "distance_distribution": (transitions_per_distance / transition.sum()).tolist(),
         "first_order_conditional_entropy": float(
             entropy @ totals[:, 0] / transition.sum()
         ),
         "transition": probabilities.tolist(),
-    }, tv
+    }
+    if coords is not None:
+        squared = np.round(((coords[:, None] - coords[None, :]) ** 2).sum(axis=-1), 12)
+        levels, inverse = np.unique(squared, return_inverse=True)
+        distances = np.bincount(inverse.reshape(k, k)[earlier, later].ravel(), minlength=len(levels))
+        summary["squared_distances"] = levels.tolist()
+        summary["distance_distribution"] = (distances / transition.sum()).tolist()
+    return summary, tv
 
 
-def sequence_diagnostics(choices, coordinates, reference=None):
+def sequence_diagnostics(choices, coordinates=None, reference=None, *, categories=None):
     """Return aggregate trajectory summaries without participant identifiers."""
-    return trajectory_summary(choices, coordinates, reference)[0]
+    return trajectory_summary(choices, coordinates, reference, categories=categories)[0]
