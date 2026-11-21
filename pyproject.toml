@@ -1,0 +1,21 @@
+[build-system]
+requires = ["uv_build>=0.13,<0.14"]
+build-backend = "uv_build"
+
+[project]
+name = "rng-sequence-bench"
+version = "0.5.1"
+description = "Conditional-order and chronological prediction benchmarks for categorical sequences"
+readme = "README.md"
+requires-python = ">=3.11"
+license = "Apache-2.0"
+license-files = ["LICENSE"]
+dependencies = ["numpy>=1.24", "scipy>=1.11"]
+
+[project.scripts]
+rng-sequence-bench = "rng_sequence_bench.__main__:main"
+rng-chain-diagnostics = "rng_sequence_bench.diagnostics:main"
+rng-sequence-checks = "rng_sequence_bench.checks:main"
+
+[dependency-groups]
+dev = ["pytest>=8", "ruff>=0.9"]
