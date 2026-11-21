@@ -12,6 +12,7 @@ from rng_sequence_bench.contexts import (
     check_forecast_causality,
 )
 from rng_sequence_bench.evaluation import forecast_diagnostics
+from rng_sequence_bench.data import read_trials
 from rng_sequence_bench.hierarchy import run_hierarchy_chain
 from rng_sequence_bench.predictive import posterior_predictive_checks
 from rng_sequence_bench.recovery import recovery_benchmark
@@ -25,6 +26,7 @@ __all__ = [
     "forecast_diagnostics",
     "pooling_benchmark",
     "posterior_predictive_checks",
+    "read_trials",
     "recovery_benchmark",
     "run_hierarchy_chain",
     "sequence_diagnostics",

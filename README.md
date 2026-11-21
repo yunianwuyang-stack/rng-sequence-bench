@@ -12,6 +12,8 @@ python -m pip install .
 
 For development with uv, run `uv sync` and `uv run pytest`.
 
+For a published version, use the wheel in the [release assets](https://github.com/yunianwuyang-stack/rng-sequence-bench/releases).
+
 ## Run
 
 Supply a CSV with `subject`, `trial`, and `choice`. Trial numbers start at 1 for each subject and have no gaps. Use one sequence per independent participant. Category labels and coordinate rows follow the same specified order. For example, for `1,2,3` on a line, omit `--coordinates` or supply `[[0],[1],[2]]`. For a grid, pass the actual 2-D positions. Here each sequence must have at least 200 trials.
@@ -22,6 +24,8 @@ rng-sequence-bench trials.csv results.json --alphabet 1,2,3 \
 ```
 
 The package also exposes `fixed_count_test` and `benchmark` for NumPy arrays. Encode the alphabet as integers from zero through the alphabet size minus one. See the function documentation for options.
+
+In Python, `read_trials("trials.csv", ["1", "2", "3"])` reads the same CSV into a zero-based NumPy array ordered by subject and trial.
 
 ### Standardized nested forecasts
 
@@ -106,23 +110,20 @@ The generic Gibbs–Metropolis function run_hierarchy_chain accepts a four-dimen
 
 posterior_predictive_checks accepts matching populations of observed and already replicated sequences, and the actual category coordinates. It reports repeat, run, recurrence, distance, entropy, transition, and total-variation summaries by posterior replicate. Histograms and observed intervals are stored in machine-readable form. Treat predictive quantiles and tail fractions as descriptive model checks.
 
-## Run the example from a fresh clone
+## Run the examples from a fresh clone
 
-With Python 3.11 or later:
-
-~~~
+```bash
 python -m pip install .
 python examples/independent_choices.py
-~~~
+python examples/matched_contexts.py
+```
 
-The example uses simulated independent choices. The three reported scores equal
-the analytic log loss, Brier loss, and top-one accuracy for a uniform model.
+Both examples use simulated independent choices. The second reads a trial CSV and compares two generated suffixes on an aligned horizon. The three reported scores equal the analytic log loss, Brier loss, and top-choice accuracy for a uniform model.
 
 ## Contributing
 
-Open an issue or pull request with a synthetic example that reproduces the
-requested change. Run the tests with python -m pytest before submitting.
+Open an issue or pull request with a synthetic example that reproduces the requested change. Run the tests with `python -m pytest` before submitting.
 
 ## License
 
-The software is licensed under Apache-2.0. See LICENSE.
+The software is licensed under Apache-2.0. See [LICENSE](LICENSE).

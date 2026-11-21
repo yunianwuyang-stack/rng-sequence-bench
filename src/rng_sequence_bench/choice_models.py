@@ -25,10 +25,11 @@ def distances(coords):
 
 
 class History:
-    def __init__(self, participants, coords, terms):
+    def __init__(self, participants, coords, terms, trial_offset=0):
         self.coords = distances(coords)
         self.positions = np.asarray(coords)
         self.terms = terms
+        self.trial_offset = trial_offset
         self.people = np.arange(participants)
         self.categories = np.arange(len(coords))
         shape = (participants, len(coords))
@@ -69,6 +70,8 @@ class History:
             "gap20plus": self.gap >= 20,
             "global": (t / len(self.categories) - self.total) / np.sqrt(t),
         }
+        if "repeat_time" in self.terms:
+            features["repeat_time"] = features["repeat"] * ((t + self.trial_offset - 70) / 100)
         for name in self.terms:
             if name.startswith("cap"):
                 features[name] = np.log2(np.minimum(self.gap, int(name[3:])))
@@ -174,7 +177,7 @@ def precision_for(terms, ridge=1.0, bias_ridge=4.0):
     return np.r_[np.full(len(terms) - 1, ridge), np.full(9, bias_ridge)]
 
 
-def simulate(params, terms, coords, uniforms, *, prefix=None):
+def simulate(params, terms, coords, uniforms, *, prefix=None, trial_offset=0):
     n, length = uniforms.shape
     k = len(coords)
     data = np.empty((n, length), dtype=int)
@@ -188,7 +191,7 @@ def simulate(params, terms, coords, uniforms, *, prefix=None):
                 "Prefix must match participants and leave at least one generated choice"
             )
         data[:, :start] = prefix
-    history = History(n, coords, terms)
+    history = History(n, coords, terms, trial_offset=trial_offset)
     core_terms = [name for name in terms if name != "bias"]
     for t in range(1, length):
         features = history.update(data, t)

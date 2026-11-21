@@ -145,6 +145,7 @@ def run_hierarchy_chain(
     report=None,
     mh_updates=1,
     repeat_slice_people=(),
+    population_update=None,
 ):
     """Sample a centered multivariate-normal hierarchy with proper NIW prior.
 
@@ -154,6 +155,7 @@ def run_hierarchy_chain(
     Optionally add a conditional slice update for the repeat coefficient of
     selected participants (zero-based indices). Coefficient zero must be a
     binary indicator for exactly one repeat candidate per trial.
+    An optional population update replaces the default conjugate update.
     """
     likelihood = Likelihood(x, y, native=native)
     n, _, _, d = likelihood.x.shape
@@ -199,7 +201,10 @@ def run_hierarchy_chain(
     accept = np.zeros(n, dtype=int)
 
     for iteration in range(warmup + draws):
-        mean, cov = sample_population(beta, kappa, df, scale, rng)
+        if population_update is None:
+            mean, cov = sample_population(beta, kappa, df, scale, rng)
+        else:
+            mean, cov = population_update(beta, rng)
         precision, center, lower, prior_precision = quadratic_proposal(
             hessian, natural, mean, cov
         )

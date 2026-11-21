@@ -1,7 +1,6 @@
 """Command-line entry point for ordered categorical trials."""
 
 import argparse
-import csv
 import json
 from pathlib import Path
 
@@ -9,40 +8,7 @@ import numpy as np
 
 from rng_sequence_bench.analysis import benchmark, fixed_count_test
 from rng_sequence_bench.chronological import standardized_benchmark
-
-
-def read_trials(path, alphabet):
-    if not all(alphabet) or len(set(alphabet)) != len(alphabet):
-        raise ValueError("Alphabet labels must be nonempty and unique")
-    outcomes = {label: i for i, label in enumerate(alphabet)}
-    people = {}
-    with path.open(newline="", encoding="utf-8-sig") as stream:
-        reader = csv.DictReader(stream)
-        if reader.fieldnames is None or not {"subject", "trial", "choice"} <= set(
-            reader.fieldnames
-        ):
-            raise ValueError("CSV requires subject, trial and choice columns")
-        for row in reader:
-            subject, choice = row["subject"], row["choice"]
-            if not subject or choice not in outcomes:
-                raise ValueError(
-                    f"Missing subject or unknown choice on line {reader.line_num}"
-                )
-            people.setdefault(subject, []).append((int(row["trial"]), outcomes[choice]))
-    sequences = []
-    for subject, rows in people.items():
-        rows.sort()
-        positions, sequence = zip(*rows, strict=True)
-        if positions != tuple(range(1, len(rows) + 1)):
-            raise ValueError(
-                f"Trial positions for {subject!r} must start at 1 and be consecutive"
-            )
-        sequences.append(sequence)
-    if not sequences or len({len(s) for s in sequences}) != 1:
-        raise ValueError(
-            "Input must contain at least one subject and equal sequence lengths"
-        )
-    return np.asarray(sequences, dtype=int)
+from rng_sequence_bench.data import read_trials
 
 
 def main():

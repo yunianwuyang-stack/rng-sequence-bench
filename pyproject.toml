@@ -4,13 +4,17 @@ build-backend = "uv_build"
 
 [project]
 name = "rng-sequence-bench"
-version = "0.5.1"
+version = "0.6.0"
 description = "Conditional-order and chronological prediction benchmarks for categorical sequences"
 readme = "README.md"
 requires-python = ">=3.11"
 license = "Apache-2.0"
 license-files = ["LICENSE"]
 dependencies = ["numpy>=1.24", "scipy>=1.11"]
+
+[project.urls]
+Repository = "https://github.com/yunianwuyang-stack/rng-sequence-bench"
+Issues = "https://github.com/yunianwuyang-stack/rng-sequence-bench/issues"
 
 [project.scripts]
 rng-sequence-bench = "rng_sequence_bench.__main__:main"
