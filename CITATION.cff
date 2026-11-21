@@ -4,6 +4,6 @@ title: RNG Sequence Bench
 type: software
 authors:
   - name: RNG Sequence Bench contributors
-version: 0.6.0
+version: 0.6.1
 license: Apache-2.0
 repository-code: https://github.com/yunianwuyang-stack/rng-sequence-bench

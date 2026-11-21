@@ -1,4 +1,5 @@
 import numpy as np
+import pytest
 from scipy.integrate import quad
 from scipy.stats import invwishart
 
@@ -58,3 +59,48 @@ def test_small_population_scale_slice_matches_quadrature():
         population.cov=population._small_group_covariance(np.array([[ss]]),n,rng)
         draws.append(np.sqrt(population.cov[0,0]))
     np.testing.assert_allclose(np.mean(draws[200:]),expected,atol=.003)
+
+
+@pytest.mark.parametrize("prior_jumps",[False,True])
+def test_noncentered_scale_update_matches_exact_conditional_mean(prior_jumps):
+    prior = .45
+    mean = np.zeros(1)
+    population = SeparatedPopulation(np.ones(1),np.array([prior]),2.0,prior_jumps=prior_jumps)
+    cov = population.cov
+    z = .9
+    beta = np.array([[z*prior]])
+    rng=np.random.default_rng(818821)
+
+    def likelihood(values):
+        return -.5*((values[:,0]-.4)/.35)**2
+
+    def density(sd):
+        return np.exp(likelihood(np.array([[sd*z]]))[0]-.5*(sd/prior)**2)
+
+    probability = quad(density,0,3)[0]
+    expected = quad(lambda sd:sd*density(sd),0,3)[0]/probability
+    ll = likelihood(beta)
+    values=[]
+    for _ in range(10_000):
+        cov,ll=population.interweave(likelihood,beta,ll,mean,cov,rng)
+        values.append(np.sqrt(cov[0,0]))
+    np.testing.assert_allclose(beta[0,0]/values[-1],z)
+    np.testing.assert_allclose(ll,likelihood(beta))
+    np.testing.assert_allclose(np.mean(values[1000:]),expected,atol=.018)
+
+
+@pytest.mark.parametrize("prior_jumps",[False,True])
+def test_standardized_loading_update_preserves_lkj_marginal(prior_jumps):
+    population=SeparatedPopulation(np.ones(2),np.ones(2),2.0,prior_jumps=prior_jumps)
+    rng=np.random.default_rng(805)
+    cov=population.cov
+    beta=np.array([[.3,.7],[-.9,.2]])
+    mean=np.zeros(2)
+    ll=np.zeros(2)
+    correlations=[]
+    for _ in range(25_000):
+        cov,ll=population.interweave(lambda values:ll,beta,ll,mean,cov,rng)
+        correlations.append(cov[0,1]/np.sqrt(cov[0,0]*cov[1,1]))
+    assert (population.interweave_accepted>0).all()
+    np.testing.assert_allclose(np.mean(correlations[1000:]),0,atol=.035)
+    np.testing.assert_allclose(np.var(correlations[1000:]),.2,atol=.025)

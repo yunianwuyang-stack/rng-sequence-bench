@@ -36,13 +36,16 @@ def covariance_correction(cov, sd_scale, eta):
 class SeparatedPopulation:
     """Blocked update of independent mean and log-scale/correlation prior."""
 
-    def __init__(self, mean_sd, between_sd, eta, mean_location=0.0):
+    def __init__(self, mean_sd, between_sd, eta, mean_location=0.0, prior_jumps=False):
         self.mean_precision = np.diag(1 / mean_sd ** 2)
         self.mean_natural = self.mean_precision @ np.broadcast_to(mean_location,mean_sd.shape)
         self.between_sd = between_sd
         self.eta = eta
+        self.prior_jumps = prior_jumps
         self.cov = np.diag(between_sd ** 2)
         self.accepted = self.attempts = 0
+        self.interweave_accepted = np.zeros(2,dtype=int)
+        self.interweave_attempts = np.zeros(2,dtype=int)
 
     def update(self, beta, rng):
         n, dimension = beta.shape
@@ -66,6 +69,58 @@ class SeparatedPopulation:
             self.cov = candidate
             self.accepted += 1
         return mean, self.cov
+
+    def interweave(self, likelihood, beta, ll, mean, cov, rng):
+        """Update either one scale or a loading in standardized coordinates."""
+        dimension = len(mean)
+        j = int(rng.integers(dimension))
+        sd = np.sqrt(np.diag(cov))
+        corr = cov / sd[:,None] / sd
+        new_sd = sd.copy()
+        proposed = beta.copy()
+        scale_update = dimension == 1 or rng.random() < .75
+        if scale_update:
+            if self.prior_jumps and rng.random() < .45:
+                new_sd[j] = abs(rng.normal(scale=self.between_sd[j]))
+                multiplier = new_sd[j]/sd[j]
+                log_prior = 0.
+            else:
+                log_step = rng.normal(scale=.38)
+                multiplier = np.exp(log_step)
+                new_sd[j] *= multiplier
+                log_prior = log_step - .5 * (new_sd[j]**2-sd[j]**2) / self.between_sd[j]**2
+            proposed[:,j] = mean[j] + (beta[:,j]-mean[j]) * multiplier
+        else:
+            rest = np.arange(dimension) != j
+            lower = np.linalg.cholesky(corr[np.ix_(rest,rest)])
+            row = np.linalg.solve(lower,corr[rest,j])
+            change = row.copy()
+            k = int(rng.integers(len(change)))
+            prior_jump = self.prior_jumps and rng.random() < .30
+            if prior_jump:
+                available = 1-row @ row+row[k]**2
+                change[k] = np.sqrt(available)*(2*rng.beta(self.eta,self.eta)-1)
+            else:
+                change[k] += rng.normal(scale=.16)
+            current_variance = 1-row @ row
+            next_variance = 1-change @ change
+            self.interweave_attempts[1] += 1
+            if next_variance <= 0:
+                return cov,ll
+            others = np.linalg.solve(lower,((beta[:,rest]-mean[rest])/sd[rest]).T).T
+            noise = ((beta[:,j]-mean[j])/sd[j]-others @ row)/np.sqrt(current_variance)
+            proposed[:,j] = mean[j] + sd[j] * (others @ change + np.sqrt(next_variance)*noise)
+            log_prior = 0. if prior_jump else (self.eta-1) * np.log(next_variance/current_variance)
+            corr[rest,j] = corr[j,rest] = lower @ change
+        if scale_update:
+            self.interweave_attempts[0] += 1
+        candidate_ll = likelihood(proposed)
+        if np.log(rng.random()) < log_prior + np.sum(candidate_ll-ll):
+            self.interweave_accepted[0 if scale_update else 1] += 1
+            beta[:,j] = proposed[:,j]
+            self.cov = corr * new_sd[:,None] * new_sd
+            return self.cov,candidate_ll
+        return cov,ll
 
     def _small_group_covariance(self, scatter, n, rng):
         """Slice log scales and compose symmetric correlation updates."""

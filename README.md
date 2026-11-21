@@ -108,6 +108,8 @@ The recovery benchmark implements eight generators on a nine-key grid, including
 
 The generic Gibbs–Metropolis function run_hierarchy_chain accepts a four-dimensional candidate-feature array (participants, training trials, categories, coefficients) and the corresponding integer choices. Supply one positive prior scale per coefficient plus the warmup length, retained count, seed, and a record callback. Use multiple independent chains and check scalar R-hat and ESS. The optional native path points to a locally compiled copy of logit_likelihood.cpp. Without it the sampler uses NumPy. The exact categorical likelihood determines acceptance in both implementations.
 
+For a Normal/HalfNormal/LKJ prior, create a separate `SeparatedPopulation` from `rng_sequence_bench.separated_prior` for each chain. Pass its `update` method as `population_update`. For a sensitivity run, also pass its `interweave` method as `interweave` to update scales or correlation loadings in standardized coordinates. Both options target the same posterior.
+
 posterior_predictive_checks accepts matching populations of observed and already replicated sequences, and the actual category coordinates. It reports repeat, run, recurrence, distance, entropy, transition, and total-variation summaries by posterior replicate. Histograms and observed intervals are stored in machine-readable form. Treat predictive quantiles and tail fractions as descriptive model checks.
 
 ## Run the examples from a fresh clone

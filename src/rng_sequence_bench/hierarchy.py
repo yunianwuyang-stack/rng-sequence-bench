@@ -146,6 +146,7 @@ def run_hierarchy_chain(
     mh_updates=1,
     repeat_slice_people=(),
     population_update=None,
+    interweave=None,
 ):
     """Sample a centered multivariate-normal hierarchy with proper NIW prior.
 
@@ -156,6 +157,8 @@ def run_hierarchy_chain(
     selected participants (zero-based indices). Coefficient zero must be a
     binary indicator for exactly one repeat candidate per trial.
     An optional population update replaces the default conjugate update.
+    An optional reparameterized update receives the likelihood and current
+    state after the participant updates. It returns covariance and log likelihood.
     """
     likelihood = Likelihood(x, y, native=native)
     n, _, _, d = likelihood.x.shape
@@ -234,6 +237,8 @@ def run_hierarchy_chain(
             )
             beta[repeat_indices] = values
             ll[repeat_indices] = repeat_likelihood(values)
+        if interweave is not None:
+            cov, ll = interweave(likelihood, beta, ll, mean, cov, rng)
         if record is not None and iteration >= warmup:
             record(iteration - warmup, mean, cov, beta, ll)
         if report is not None and (iteration + 1) % 100 == 0:
