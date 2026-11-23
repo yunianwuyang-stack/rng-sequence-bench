@@ -1,9 +1,52 @@
 """Diagnostics for observed or freely generated categorical trajectories."""
 
+import inspect
+from collections.abc import Callable, Mapping
+
 import numpy as np
 from scipy.special import xlogy
 
 TV_QUANTILES = (0.50, 0.90, 0.95, 0.99)
+
+
+def _call_custom_stat(fn: Callable, sequences: np.ndarray, mask: np.ndarray | None):
+    """Call user-supplied statistic as fn(sequences, mask) or fn(sequences)."""
+    sig = inspect.signature(fn)
+    params = list(sig.parameters.values())
+    accepts_mask = (
+        any(p.kind == inspect.Parameter.VAR_POSITIONAL for p in params)
+        or "mask" in sig.parameters
+        or sum(
+            p.kind in (inspect.Parameter.POSITIONAL_ONLY, inspect.Parameter.POSITIONAL_OR_KEYWORD)
+            for p in params
+        )
+        >= 2
+    )
+    raw = fn(sequences, mask) if accepts_mask else fn(sequences)
+    arr = np.asarray(raw, dtype=float)
+    if not np.isfinite(arr).all():
+        raise ValueError("Custom sequence statistic returned non-finite values")
+    return float(arr) if arr.ndim == 0 else arr.tolist()
+
+
+def evaluate_custom_stats(
+    sequences: np.ndarray,
+    mask: np.ndarray | None = None,
+    custom_stats: Mapping[str, Callable] | None = None,
+) -> dict:
+    """Validate and evaluate optional domain-specific sequence statistics."""
+    if custom_stats is None:
+        return {}
+    if not isinstance(custom_stats, Mapping):
+        raise ValueError("custom_stats must be a mapping of statistic names to callables")
+    results = {}
+    for name, fn in custom_stats.items():
+        if not isinstance(name, str) or not name.strip():
+            raise ValueError("custom_stats keys must be non-empty strings")
+        if not callable(fn):
+            raise ValueError(f"custom_stats['{name}'] must be callable")
+        results[name] = _call_custom_stat(fn, sequences, mask)
+    return results
 
 
 def _participant_conditional_entropy(earlier, later, valid_pair, k):
@@ -156,9 +199,20 @@ def trajectory_summary(
 
 
 def sequence_diagnostics(
-    choices, coordinates=None, reference=None, *, categories=None, mask=None
+    choices,
+    coordinates=None,
+    reference=None,
+    *,
+    categories=None,
+    mask=None,
+    custom_stats=None,
 ):
     """Return aggregate trajectory summaries without participant identifiers."""
-    return trajectory_summary(
+    summary, _ = trajectory_summary(
         choices, coordinates, reference, categories=categories, mask=mask
-    )[0]
+    )
+    if custom_stats is not None:
+        seq = np.asarray(choices)
+        m = None if mask is None else np.asarray(mask, dtype=bool)
+        summary["custom_statistics"] = evaluate_custom_stats(seq, m, custom_stats)
+    return summary

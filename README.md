@@ -129,6 +129,12 @@ Open an issue or pull request with a synthetic example that reproduces the reque
 ## License
 
 The software is licensed under Apache-2.0. See [LICENSE](LICENSE).
+## Changes in 0.9.0
+
+- **Domain-specific `custom_stats` hooks:** `sequence_diagnostics`, `posterior_predictive_checks`, and `audit_sequence_contexts` now accept an optional `custom_stats: dict[str, Callable]` mapping names to user-defined sequence statistics (`fn(sequences)` or `fn(sequences, mask)`). This cleanly separates the general categorical-sequence core audit layer (forecast scoring, calibration, paired starts, masked custom statistics) from built-in RNG/spatial extension summaries (distance distributions, recurrence gaps), allowing direct evaluation of task-specific outcomes such as advantageous deck share in the Iowa Gambling Task or cyclic upgrade rates in Rock-Paper-Scissors.
+- **R `reticulate` quickstart and concise example output:** Added a 14-line R `reticulate` bridge example (`examples/r_reticulate_quickstart.R`) alongside the CSV R/Stan bridge (`examples/r_stan_bridge.R`). `examples/fitted_sequence_audit.py` now prints a concise summary matching the article listing by default (pass `--verbose` for the full JSON dump).
+- **Package scope note:** Although named `rng-sequence-bench` for its origins in human random-number generation benchmarks, the core audit functions (`forecast_diagnostics`, `check_forecast_causality`, `sequence_diagnostics`, `posterior_predictive_checks`, `audit_sequence_contexts`, `adequacy_set`, `mc_ranking_probability`) are model-agnostic and apply to any finite categorical choice sequence with equal or variable lengths.
+
 ## Changes in 0.8.0
 
 - **Variable-length and missing-trial support:** `from_ragged` and `read_ragged_trials` construct `(choices, mask)` arrays, and `forecast_diagnostics`, `sequence_diagnostics`, `posterior_predictive_checks`, and `audit_sequence_contexts` accept an optional boolean `mask` array so unequal sequence lengths and missing trials are handled cleanly without truncation.

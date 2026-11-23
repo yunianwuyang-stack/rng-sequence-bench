@@ -4,7 +4,7 @@ import numpy as np
 from scipy.spatial.distance import jensenshannon
 from scipy.stats import wasserstein_distance
 
-from .sequence_metrics import trajectory_summary
+from .sequence_metrics import evaluate_custom_stats, trajectory_summary
 
 GAP_EDGES = (1, 2, 4, 8, 16, 32, 64)
 
@@ -80,24 +80,38 @@ def conditional_distance(sequences, coordinates, mask=None):
 
 
 def posterior_predictive_checks(
-    observed, replicated, coordinates=None, *, categories=None, mask=None
+    observed,
+    replicated,
+    coordinates=None,
+    *,
+    categories=None,
+    mask=None,
+    custom_stats=None,
 ):
     """Summarize comparable observed and posterior-replicated populations.
 
     Draws must retain the pairing and dimensions of the observed people.
     Predictive intervals treat each generated population as one draw. The
     pointwise coverage fractions describe the sampled participants, not
-    independent hypothesis tests across statistics or participants.
+    independent hypothesis tests across statistics or participants. Optional
+    ``custom_stats`` maps names to callables ``fn(sequences)`` or
+    ``fn(sequences, mask)`` returning finite domain-specific summaries.
     """
     observed = np.asarray(observed)
+    m_bool = None if mask is None else np.asarray(mask, dtype=bool)
     ref, tv_obs, r_obs = predictive_profile(
         observed, coordinates, categories=categories, mask=mask
     )
+    obs_custom = evaluate_custom_stats(observed, m_bool, custom_stats)
+    rep_custom = {name: [] for name in obs_custom}
     k = len(ref["transition"])
     static = {"tv_quantiles", "squared_distances", "run_lengths"}
     aggregates = {key: [] for key in ref.keys() - static}
     tv_people, repeat_people = [], []
     distances = {"tv_wasserstein": [], "repeat_wasserstein": [], "transition_js": []}
+    for name, val in obs_custom.items():
+        if np.asarray(val).ndim == 0:
+            distances[f"custom_{name}_abs_diff"] = []
     for generated in replicated:
         simulated = np.asarray(generated)
         if simulated.shape != observed.shape:
@@ -119,6 +133,14 @@ def posterior_predictive_checks(
                 base=2,
             )
         )
+        if custom_stats is not None:
+            sim_custom = evaluate_custom_stats(simulated, m_bool, custom_stats)
+            for name, val in sim_custom.items():
+                rep_custom[name].append(val)
+                if f"custom_{name}_abs_diff" in distances:
+                    distances[f"custom_{name}_abs_diff"].append(
+                        float(abs(float(val) - float(obs_custom[name])))
+                    )
     if not tv_people:
         raise ValueError("Require at least one recorded predictive replicate")
 
@@ -148,7 +170,7 @@ def posterior_predictive_checks(
         for key, values in sorted(aggregates.items())
         if values
     }
-    return {
+    output = {
         "replicates": len(tv_people),
         "participants": len(observed),
         "length": observed.shape[1],
@@ -163,6 +185,12 @@ def posterior_predictive_checks(
             "repeat": coverage(r_obs, repeat_people),
         },
     }
+    if custom_stats is not None:
+        output["custom_statistics"] = {
+            name: table(rep_custom[name], obs_custom[name])
+            for name in sorted(obs_custom)
+        }
+    return output
 
 
 def mc_ranking_probability(discrepancies_a, discrepancies_b, *, target_prob=0.95):

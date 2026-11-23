@@ -6,6 +6,7 @@ import numpy as np
 
 from .evaluation import SCORE_NAMES, forecast_diagnostics, interval, scores
 from .predictive import posterior_predictive_checks
+from .sequence_metrics import evaluate_custom_stats
 
 
 def _repeat_probabilities(probabilities, previous):
@@ -23,6 +24,7 @@ def audit_sequence_contexts(
     initial_transitions=9,
     seed=0,
     mask=None,
+    custom_stats=None,
 ):
     """Compare observed-history forecasts with paired suffixes from two starts.
 
@@ -135,7 +137,7 @@ def audit_sequence_contexts(
         }
         for idx, name in enumerate(SCORE_NAMES)
     }
-    return {
+    report = {
         "fit_through": fit_through,
         "suffix_length": future.shape[1],
         "replicates": len(reset),
@@ -144,10 +146,20 @@ def audit_sequence_contexts(
         "holdout_scores_named": holdout_scores_named,
         "observed_history_repetition": segments,
         "uniform_start": posterior_predictive_checks(
-            future, reset, coordinates, categories=p.shape[-1], mask=m_suffix
+            future,
+            reset,
+            coordinates,
+            categories=p.shape[-1],
+            mask=m_suffix,
+            custom_stats=custom_stats,
         ),
         "observed_prefix": posterior_predictive_checks(
-            future, prefixed, coordinates, categories=p.shape[-1], mask=m_suffix
+            future,
+            prefixed,
+            coordinates,
+            categories=p.shape[-1],
+            mask=m_suffix,
+            custom_stats=custom_stats,
         ),
         "uniform_minus_prefix_repeat": {
             "initial_transitions": initial_transitions,
@@ -155,6 +167,21 @@ def audit_sequence_contexts(
             "predictive95": np.quantile(early_late, [0.025, 0.975], axis=0).tolist(),
         },
     }
+    if custom_stats is not None:
+        paired_custom = {}
+        for name in sorted(custom_stats):
+            diffs = []
+            for a, b in zip(reset, prefixed):
+                va = np.asarray(evaluate_custom_stats(a, m_suffix, {name: custom_stats[name]})[name])
+                vb = np.asarray(evaluate_custom_stats(b, m_suffix, {name: custom_stats[name]})[name])
+                diffs.append(va - vb)
+            arr = np.asarray(diffs)
+            paired_custom[name] = {
+                "median": np.median(arr, axis=0).tolist(),
+                "predictive95": np.quantile(arr, [0.025, 0.975], axis=0).tolist(),
+            }
+        report["uniform_minus_prefix_custom"] = paired_custom
+    return report
 
 
 def check_forecast_causality(forecast, choices, fit_through, categories):
