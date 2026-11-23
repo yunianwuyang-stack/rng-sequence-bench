@@ -18,6 +18,7 @@ def fitted_audit():
     prefix = y[:, :cut]
 
     # BEGIN ARTICLE EXAMPLE
+    # Step 1: Fit a conditional-logit model on each participant's prefix (trials 1..40).
     x = design(design_features(prefix, coords, RD), RD)
     beta = fit_batch(x, prefix[:, 1:])
 
@@ -25,13 +26,18 @@ def fitted_audit():
         x = design(design_features(history, coords, RD), RD)
         return predict(x, beta)
 
+    # Step 2: Verify that holdout forecasts do not depend on future responses.
     check = check_forecast_causality(forecast, y, cut, len(coords))
+
+    # Step 3: Generate paired reset-start and prefix-continuation suffixes with shared uniforms.
     uniforms = rng.random((32, *y.shape))
     pairs = (
         (simulate(beta, RD, coords, u[:, cut:]),
          simulate(beta, RD, coords, u, prefix=prefix)[:, cut:])
         for u in uniforms
     )
+
+    # Step 4: Audit holdout forecasts, calibration, paired starts, and fixed-count reference.
     report = audit_sequence_contexts(
         y, coords, forecast(y), pairs, fit_through=cut,
     )
@@ -40,7 +46,7 @@ def fitted_audit():
 
     assert check["altered_trials"] == [41, 51]
     assert report["replicates"] == 32 and report["suffix_length"] == 20
-    assert report["holdout_forecasts"]["scores"][0] < np.log(3)
+    assert report["holdout_forecasts"]["named_scores"]["log_loss"] < np.log(3)
     return {"seed":47023,"causality":check,"audit":report,"fixed_count":reference}
 
 

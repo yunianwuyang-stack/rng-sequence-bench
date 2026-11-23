@@ -129,6 +129,13 @@ Open an issue or pull request with a synthetic example that reproduces the reque
 ## License
 
 The software is licensed under Apache-2.0. See [LICENSE](LICENSE).
+## Changes in 0.8.0
+
+- **Variable-length and missing-trial support:** `from_ragged` and `read_ragged_trials` construct `(choices, mask)` arrays, and `forecast_diagnostics`, `sequence_diagnostics`, `posterior_predictive_checks`, and `audit_sequence_contexts` accept an optional boolean `mask` array so unequal sequence lengths and missing trials are handled cleanly without truncation.
+- **Named forecast outputs:** `forecast_diagnostics` now returns `named_scores` (`log_loss`, `brier`, `top1_accuracy`) alongside the backward-compatible `scores` list, and `audit_sequence_contexts` returns `holdout_scores_named` with participant-bootstrap 95% confidence intervals.
+- **Calibration, participant-level entropy, and MC decision helpers:** Added `ece_binning_sensitivity` (equal-width and quantile binning plus CORP isotonic reliability), participant-level conditional entropy medians/IQRs in `sequence_diagnostics`, `adequacy_set` for generative falsification sets, and `mc_ranking_probability` for paired Monte Carlo ranking stability $P(\hat{D}_A < \hat{D}_B)$.
+- **R/Stan bridge and expanded contract tests:** Added `examples/r_stan_bridge.R`, `examples/audit_from_r_export.py`, and contract/edge-case test suites (`45` tests passing across Python 3.11–3.14).
+
 ## Changes in 0.7.0
 
 For categorical tasks without a spatial layout, call `audit_sequence_contexts` with keyword arguments `probabilities`, `replicated_pairs`, and `fit_through`. Omitting `coordinates` skips the distance summaries and preserves the alphabet from the probability columns, even when a category is absent from the data. For direct simulation summaries, pass `categories=K` to `posterior_predictive_checks`.

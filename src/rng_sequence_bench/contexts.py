@@ -4,12 +4,13 @@ from collections.abc import Iterable
 
 import numpy as np
 
-from .evaluation import forecast_diagnostics, interval, scores
+from .evaluation import SCORE_NAMES, forecast_diagnostics, interval, scores
 from .predictive import posterior_predictive_checks
 
 
 def _repeat_probabilities(probabilities, previous):
-    return np.take_along_axis(probabilities, previous[..., None], axis=-1)[..., 0]
+    safe_prev = np.maximum(previous, 0)
+    return np.take_along_axis(probabilities, safe_prev[..., None], axis=-1)[..., 0]
 
 
 def audit_sequence_contexts(
@@ -21,17 +22,21 @@ def audit_sequence_contexts(
     fit_through,
     initial_transitions=9,
     seed=0,
+    mask=None,
 ):
     """Compare observed-history forecasts with paired suffixes from two starts.
 
-    Choices are integer (participants, trials) arrays in probability-column order.
-    Optional coordinates must use that same order. Without them, only geometry
-    summaries are omitted.
+    Choices are integer ``(participants, trials)`` arrays in probability-column
+    order. Optional ``coordinates`` must use that same order. Without them, only
+    geometry summaries are omitted. Optional boolean ``mask`` of shape
+    ``(participants, trials)`` supports unequal sequence lengths or missing
+    trials.
     Probability row zero predicts choice index one from the first observed choice.
     Subsequent rows predict each next choice using preceding observed choices.
-    Supply an iterable of (uniform-start, observed-prefix) replicate pairs. Each
-    replicate includes only the suffix, in the same participant and category order
-    as choices. Use the same parameters on both sides and a paired random stream.
+    Supply an iterable of ``(uniform-start, observed-prefix)`` replicate pairs.
+    Each replicate includes only the suffix, in the same participant and category
+    order as choices. Use the same parameters on both sides and a paired random
+    stream.
     This function never fits or refits an external model; use the causality check
     separately to exercise a callable forecast with perturbed observations.
     """
@@ -45,25 +50,51 @@ def audit_sequence_contexts(
         raise ValueError("The fitted prefix needs two choices and the suffix needs three")
     if not 1 <= initial_transitions < y.shape[1] - fit_through - 1:
         raise ValueError("The initial transition count must leave later suffix transitions")
+    if mask is not None:
+        m = np.asarray(mask)
+        if m.shape != y.shape or m.dtype != bool:
+            raise ValueError("Mask must be a boolean array matching choices shape")
+        m_prefix = m[:, :fit_through]
+        m_suffix = m[:, fit_through:]
+        if not (m_prefix.sum(axis=1) >= 2).all() or not (m_suffix.sum(axis=1) >= 2).all():
+            raise ValueError(
+                "Each participant must have at least two unmasked trials in both prefix and suffix"
+            )
+        valid_y = y[m]
+        valid_p = p[m[:, 1:]]
+    else:
+        m = None
+        m_suffix = None
+        valid_y = y
+        valid_p = p
     if (
-        y.min() < 0
-        or y.max() >= p.shape[-1]
-        or not np.isfinite(p).all()
-        or (p <= 0).any()
-        or not np.allclose(p.sum(axis=-1), 1, rtol=0, atol=1e-8)
+        valid_y.min() < 0
+        or valid_y.max() >= p.shape[-1]
+        or not np.isfinite(valid_p).all()
+        or (valid_p <= 0).any()
+        or not np.allclose(valid_p.sum(axis=-1), 1, rtol=0, atol=1e-8)
     ):
         raise ValueError("Invalid prefix choices or probability rows")
-    forecast = forecast_diagnostics(p[:, fit_through - 1 :], y[:, fit_through:])
+    forecast = forecast_diagnostics(
+        p[:, fit_through - 1 :], y[:, fit_through:], mask=m_suffix
+    )
     rng = np.random.default_rng(seed)
-    observed = y[:, 1:] == y[:, :-1]
+    valid_pair = (
+        np.ones((len(y), y.shape[1] - 1), dtype=bool)
+        if m is None
+        else (m[:, :-1] & m[:, 1:])
+    )
+    observed = (y[:, 1:] == y[:, :-1]) & valid_pair
     predicted = _repeat_probabilities(p, y[:, :-1])
     segments = {}
     for key, segment in (
         ("fit", slice(None, fit_through - 1)),
         ("holdout", slice(fit_through, None)),
     ):
-        actual = observed[:, segment].mean(axis=1)
-        estimate = predicted[:, segment].mean(axis=1)
+        vp = valid_pair[:, segment]
+        denom = np.maximum(vp.sum(axis=1), 1)
+        actual = observed[:, segment].sum(axis=1) / denom
+        estimate = (predicted[:, segment] * vp).sum(axis=1) / denom
         segments[key] = {
             "observed": float(actual.mean()),
             "predicted": float(estimate.mean()),
@@ -71,28 +102,53 @@ def audit_sequence_contexts(
         }
 
     reset, prefixed, early_late = [], [], []
+    suffix_pair = (
+        np.ones((len(y), y.shape[1] - fit_through - 1), dtype=bool)
+        if m_suffix is None
+        else (m_suffix[:, :-1] & m_suffix[:, 1:])
+    )
     for a, b in replicated_pairs:
         a, b = np.asarray(a), np.asarray(b)
         if a.shape != y[:, fit_through:].shape or b.shape != a.shape:
             raise ValueError("Both simulated starts must match the observed suffix shape")
         reset.append(a)
         prefixed.append(b)
-        diff = (a[:, 1:] == a[:, :-1]).astype(float) - (b[:, 1:] == b[:, :-1])
-        early_late.append(
-            [diff[:, :initial_transitions].mean(), diff[:, initial_transitions:].mean()]
-        )
+        diff = ((a[:, 1:] == a[:, :-1]).astype(float) - (b[:, 1:] == b[:, :-1]))
+        e_mask = suffix_pair[:, :initial_transitions]
+        l_mask = suffix_pair[:, initial_transitions:]
+        early_mean = float(diff[:, :initial_transitions][e_mask].mean()) if e_mask.any() else 0.0
+        late_mean = float(diff[:, initial_transitions:][l_mask].mean()) if l_mask.any() else 0.0
+        early_late.append([early_mean, late_mean])
     future = y[:, fit_through:]
     if not reset:
         raise ValueError("Provide at least one pair of simulated suffixes")
+    holdout_scores_ci = interval(
+        scores(p[:, fit_through - 1 :], future, mask=m_suffix), rng
+    )
+    holdout_scores_named = {
+        name: {
+            "mean": float(holdout_scores_ci["mean"][idx]),
+            "ci95": [
+                float(holdout_scores_ci["ci95"][0][idx]),
+                float(holdout_scores_ci["ci95"][1][idx]),
+            ],
+        }
+        for idx, name in enumerate(SCORE_NAMES)
+    }
     return {
         "fit_through": fit_through,
         "suffix_length": future.shape[1],
         "replicates": len(reset),
         "holdout_forecasts": forecast,
-        "holdout_scores_ci": interval(scores(p[:, fit_through - 1 :], future), rng),
+        "holdout_scores_ci": holdout_scores_ci,
+        "holdout_scores_named": holdout_scores_named,
         "observed_history_repetition": segments,
-        "uniform_start": posterior_predictive_checks(future, reset, coordinates, categories=p.shape[-1]),
-        "observed_prefix": posterior_predictive_checks(future, prefixed, coordinates, categories=p.shape[-1]),
+        "uniform_start": posterior_predictive_checks(
+            future, reset, coordinates, categories=p.shape[-1], mask=m_suffix
+        ),
+        "observed_prefix": posterior_predictive_checks(
+            future, prefixed, coordinates, categories=p.shape[-1], mask=m_suffix
+        ),
         "uniform_minus_prefix_repeat": {
             "initial_transitions": initial_transitions,
             "median": np.median(early_late, axis=0).tolist(),

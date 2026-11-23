@@ -9,39 +9,69 @@ from .sequence_metrics import trajectory_summary
 GAP_EDGES = (1, 2, 4, 8, 16, 32, 64)
 
 
-def recurrence_distribution(sequences, category_count):
+def recurrence_distribution(sequences, category_count, mask=None):
     """Pool intervals between recorded occurrences of the same category per person."""
     n, length = sequences.shape
-    keys = (np.arange(n)[:, None] * category_count + sequences) * length
-    entries = np.sort((keys + np.arange(length)).ravel())
-    diffs = np.diff(entries)[entries[1:] // length == entries[:-1] // length]
+    if mask is None:
+        keys = (np.arange(n)[:, None] * category_count + sequences) * length
+        entries = np.sort((keys + np.arange(length)).ravel())
+        diffs = np.diff(entries)[entries[1:] // length == entries[:-1] // length]
+    else:
+        diffs_list = []
+        for i in range(n):
+            valid_idx = np.flatnonzero(mask[i])
+            if len(valid_idx) < 2:
+                continue
+            vals = sequences[i, valid_idx]
+            keys = vals * length + valid_idx
+            entries = np.sort(keys)
+            same_cat = entries[1:] // length == entries[:-1] // length
+            diffs_list.append(np.diff(entries)[same_cat])
+        diffs = np.concatenate(diffs_list) if diffs_list else np.array([], dtype=int)
     counts = np.histogram(diffs, [*GAP_EDGES, np.inf])[0]
     return (counts / counts.sum()).tolist() if counts.sum() else None
 
 
-def predictive_profile(sequences, coordinates=None, *, categories=None):
-    aggregate, tv = trajectory_summary(sequences, coordinates, categories=categories)
+def predictive_profile(sequences, coordinates=None, *, categories=None, mask=None):
+    aggregate, tv = trajectory_summary(
+        sequences, coordinates, categories=categories, mask=mask
+    )
     k = len(aggregate["transition"])
-    repeat = (sequences[:, 1:] == sequences[:, :-1]).mean(axis=1)
+    if mask is None:
+        valid_pair = np.ones((sequences.shape[0], sequences.shape[1] - 1), dtype=bool)
+        e_valid, l_valid = sequences[:, :-1].ravel(), sequences[:, 1:].ravel()
+        proportions = (sequences[:, :, None] == np.arange(k)).mean(axis=1)
+    else:
+        m = np.asarray(mask, dtype=bool)
+        valid_pair = m[:, :-1] & m[:, 1:]
+        e_valid = sequences[:, :-1][valid_pair]
+        l_valid = sequences[:, 1:][valid_pair]
+        counts = ((sequences[:, :, None] == np.arange(k)) & m[:, :, None]).sum(axis=1)
+        proportions = counts / m.sum(axis=1, keepdims=True)
+    repeat = ((sequences[:, 1:] == sequences[:, :-1]) & valid_pair).sum(axis=1) / valid_pair.sum(axis=1)
     aggregate["repeat_gap_distribution"] = recurrence_distribution(
-        sequences, k
+        sequences, k, mask=mask
     )
-    joint = np.bincount(
-        (sequences[:, :-1] * k + sequences[:, 1:]).ravel(),
-        minlength=k ** 2,
-    )
+    joint = np.bincount(e_valid * k + l_valid, minlength=k ** 2)
     aggregate["transition_joint"] = (
         (joint / joint.sum()).reshape(k, k).tolist()
     )
-    proportions = (sequences[:, :, None] == np.arange(k)).mean(axis=1)
     aggregate["mean_digit_share"] = proportions.mean(axis=0).tolist()
     if coordinates is not None:
-        aggregate["mean_nonrepeat_distance"] = conditional_distance(sequences, coordinates)
+        aggregate["mean_nonrepeat_distance"] = conditional_distance(
+            sequences, coordinates, mask=mask
+        )
     return aggregate, tv, repeat
 
 
-def conditional_distance(sequences, coordinates):
-    old, new = sequences[:, :-1], sequences[:, 1:]
+def conditional_distance(sequences, coordinates, mask=None):
+    if mask is None:
+        old, new = sequences[:, :-1], sequences[:, 1:]
+    else:
+        m = np.asarray(mask, dtype=bool)
+        valid_pair = m[:, :-1] & m[:, 1:]
+        old = sequences[:, :-1][valid_pair]
+        new = sequences[:, 1:][valid_pair]
     distances = np.linalg.norm(
         np.asarray(coordinates)[old] - np.asarray(coordinates)[new], axis=-1
     )
@@ -49,7 +79,9 @@ def conditional_distance(sequences, coordinates):
     return float(distances[nonrepeat].mean()) if nonrepeat.any() else None
 
 
-def posterior_predictive_checks(observed, replicated, coordinates=None, *, categories=None):
+def posterior_predictive_checks(
+    observed, replicated, coordinates=None, *, categories=None, mask=None
+):
     """Summarize comparable observed and posterior-replicated populations.
 
     Draws must retain the pairing and dimensions of the observed people.
@@ -58,7 +90,9 @@ def posterior_predictive_checks(observed, replicated, coordinates=None, *, categ
     independent hypothesis tests across statistics or participants.
     """
     observed = np.asarray(observed)
-    ref, tv_obs, r_obs = predictive_profile(observed, coordinates, categories=categories)
+    ref, tv_obs, r_obs = predictive_profile(
+        observed, coordinates, categories=categories, mask=mask
+    )
     k = len(ref["transition"])
     static = {"tv_quantiles", "squared_distances", "run_lengths"}
     aggregates = {key: [] for key in ref.keys() - static}
@@ -68,7 +102,9 @@ def posterior_predictive_checks(observed, replicated, coordinates=None, *, categ
         simulated = np.asarray(generated)
         if simulated.shape != observed.shape:
             raise ValueError("Replicated and observed populations must match")
-        sample, tv, rep = predictive_profile(simulated, coordinates, categories=k)
+        sample, tv, rep = predictive_profile(
+            simulated, coordinates, categories=k, mask=mask
+        )
         tv_people.append(tv)
         repeat_people.append(rep)
         for key, group in aggregates.items():
@@ -126,4 +162,47 @@ def posterior_predictive_checks(observed, replicated, coordinates=None, *, categ
             "tv": coverage(tv_obs, tv_people),
             "repeat": coverage(r_obs, repeat_people),
         },
+    }
+
+
+def mc_ranking_probability(discrepancies_a, discrepancies_b, *, target_prob=0.95):
+    """Estimate P(D_A < D_B) and paired MCSE from matched simulation replicates.
+
+    Uses the paired difference ``delta_r = D_{A,r} - D_{B,r}`` across ``R``
+    replicates so shared random streams are accounted for in the variance.
+    """
+    a = np.asarray(discrepancies_a, dtype=float)
+    b = np.asarray(discrepancies_b, dtype=float)
+    if a.ndim != 1 or a.shape != b.shape or len(a) < 2:
+        raise ValueError("Provide paired 1-D discrepancy arrays with at least 2 replicates")
+    diff = a - b
+    mean_diff = float(diff.mean())
+    mcse = float(diff.std(ddof=1) / np.sqrt(len(diff)))
+    prob_a_better = float(np.mean(diff < 0))
+    from scipy.stats import norm
+    normal_prob = float(norm.cdf(-mean_diff / mcse)) if mcse > 0 else float(mean_diff < 0)
+    z_req = float(norm.ppf(target_prob))
+    recommended_r = (
+        int(np.ceil((z_req * diff.std(ddof=1) / abs(mean_diff)) ** 2))
+        if abs(mean_diff) > 0 and diff.std(ddof=1) > 0
+        else None
+    )
+    return {
+        "replicates": int(len(diff)),
+        "mean_difference": mean_diff,
+        "paired_mcse": mcse,
+        "ci95_mc": [mean_diff - 1.96 * mcse, mean_diff + 1.96 * mcse],
+        "empirical_prob_a_better": prob_a_better,
+        "normal_approx_prob_a_better": normal_prob,
+        "recommended_replicates": recommended_r,
+    }
+
+
+def adequacy_set(observed_ci, model_values, *, margin=0.0):
+    """Return models whose summary falls within the observed interval (+/- margin)."""
+    lo, hi = float(observed_ci[0]) - float(margin), float(observed_ci[1]) + float(margin)
+    return {
+        "bounds": [lo, hi],
+        "adequate": [name for name, val in model_values.items() if lo <= float(val) <= hi],
+        "falsified": [name for name, val in model_values.items() if not (lo <= float(val) <= hi)],
     }

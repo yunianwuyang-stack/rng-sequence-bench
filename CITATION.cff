@@ -3,7 +3,9 @@ message: Please cite this version of the software when using it in research.
 title: RNG Sequence Bench
 type: software
 authors:
-  - name: RNG Sequence Bench contributors
-version: 0.7.0
+  - family-names: Ji
+    given-names: Yujie
+    affiliation: Beijing Normal University
+version: 0.8.0
 license: Apache-2.0
 repository-code: https://github.com/yunianwuyang-stack/rng-sequence-bench
