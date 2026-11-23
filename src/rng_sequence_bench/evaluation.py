@@ -241,8 +241,31 @@ def forecast_diagnostics(probabilities, targets, *, mask=None):
     return calibration(prob, target, mask=m)
 
 
+def debiased_ece_l2(probabilities, outcomes, *, n_bins=10, strategy="quantile"):
+    """Estimate debiased L2 calibration error following Roelofs et al. (2022).
+
+    Subtracts the finite-sample within-bin variance bias ``q_b (1 - q_b) / (n_b - 1)``
+    from each bin with at least two observations before taking the square root of
+    the truncated non-negative squared calibration error.
+    """
+    rows, _ = reliability(probabilities, outcomes, n_bins=n_bins, strategy=strategy)
+    total = sum(row["n"] for row in rows)
+    if total == 0:
+        return 0.0
+    ce_sq = 0.0
+    for row in rows:
+        n_b = row["n"]
+        if n_b < 2:
+            continue
+        p_b = row["predicted"]
+        q_b = row["observed"]
+        weight = n_b / total
+        ce_sq += weight * ((p_b - q_b) ** 2 - (q_b * (1.0 - q_b)) / (n_b - 1))
+    return float(np.sqrt(max(0.0, ce_sq)))
+
+
 def ece_binning_sensitivity(probabilities, targets, *, bin_counts=(5, 10, 15), mask=None):
-    """Compare top-choice and classwise ECE across equal-width and quantile bins plus CORP."""
+    """Compare top-choice and classwise ECE across binning schemes, debiased L2 ECE, and CORP."""
     diag = forecast_diagnostics(probabilities, targets, mask=mask)
     prob = np.asarray(probabilities, dtype=float)
     target = np.asarray(targets)
@@ -256,7 +279,7 @@ def ece_binning_sensitivity(probabilities, targets, *, bin_counts=(5, 10, 15), m
     ties = np.isclose(prob_flat, confidence[:, None], atol=1e-12, rtol=0).sum(axis=1)
     hit = np.isclose(picked, confidence, atol=1e-12, rtol=0) / ties
 
-    out = {"uniform": {}, "quantile": {}, "corp": diag["top_corp"]}
+    out = {"uniform": {}, "quantile": {}, "debiased_l2_quantile": {}, "corp": diag["top_corp"]}
     for strategy in ("uniform", "quantile"):
         for b in bin_counts:
             top_rows, top_e = reliability(confidence, hit, n_bins=b, strategy=strategy)
@@ -269,4 +292,15 @@ def ece_binning_sensitivity(probabilities, targets, *, bin_counts=(5, 10, 15), m
                 "top_nonempty_bins": int(sum(1 for r in top_rows if r["n"] > 0)),
                 "mean_class_ece": float(np.mean(class_e)),
             }
+            if strategy == "quantile":
+                deb_class = [
+                    debiased_ece_l2(prob_flat[:, c], events[:, c], n_bins=b, strategy="quantile")
+                    for c in range(n_classes)
+                ]
+                out["debiased_l2_quantile"][str(b)] = {
+                    "top_debiased_ece": debiased_ece_l2(
+                        confidence, hit, n_bins=b, strategy="quantile"
+                    ),
+                    "mean_class_debiased_ece": float(np.mean(deb_class)),
+                }
     return out

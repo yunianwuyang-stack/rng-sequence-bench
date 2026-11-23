@@ -68,5 +68,5 @@ def test_mc_ranking_probability_and_adequacy_set():
     assert rank["recommended_replicates"] is not None
 
     adeq = adequacy_set([0.1267, 0.1456], {"RDC": 0.0882, "RDC+freq": 0.1567, "Cap+offsets": 0.1362})
-    assert adeq["adequate"] == ["Cap+offsets"]
-    assert set(adeq["falsified"]) == {"RDC", "RDC+freq"}
+    assert adeq["within_band"] == ["Cap+offsets"]
+    assert set(adeq["outside_band"]) == {"RDC", "RDC+freq"}

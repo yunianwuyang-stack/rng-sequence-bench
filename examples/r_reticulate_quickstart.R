@@ -1,4 +1,4 @@
-# Direct R -> RNG Sequence Bench (v0.9.0) quickstart via reticulate
+# Direct R -> RNG Sequence Bench (v0.9.2) quickstart via reticulate
 library(reticulate)
 rsb <- import("rng_sequence_bench")
 np  <- import("numpy")

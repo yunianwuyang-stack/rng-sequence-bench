@@ -129,6 +129,17 @@ Open an issue or pull request with a synthetic example that reproduces the reque
 ## License
 
 The software is licensed under Apache-2.0. See [LICENSE](LICENSE).
+## Changes in 0.9.2
+
+- **Explicit separation of Route A compatibility screening vs. Route B TOST equivalence:** Replaced the ambiguous `equivalence_margins` naming with `predictive_compatibility_screen` (Route A: empirical 95% reference-band containment, interval overlap, and simulation-replicate compatibility margin check; `reference_band_screen` retained as a compatibility-margin alias) and dedicated Route B TOST hypothesis-testing helpers `tost_equivalence_test` and `tost_from_estimate` implementing 90% two one-sided equivalence CIs over paired differences, bootstrap/posterior draws, or point estimates with MCSE gating.
+- **Explicit three-layer architecture:** Documents the clean separation between the general `rng_sequence_bench` core auditing package, cognitive model implementations (`Replication/models/` in the companion archive), and public-dataset reproduction scripts (`Replication/benchmarks/`).
+
+## Changes in 0.9.1
+
+- **Unbiased calibration and simultaneous SBC checks:** Added Roelofs et al. (2022) bias-corrected squared calibration error `debiased_ece_l2(probabilities, outcomes, n_bins=10, strategy="quantile")` (also surfaced inside `ece_binning_sensitivity`) and Säilynoja et al. (2022) simultaneous uniform ECDF confidence band diagnostics `plot_sbc_ecdf_diff(ranks, max_rank, confidence=0.95)`.
+- **Initial reference-band screening API:** Introduced initial `reference_band_screen` and `adequacy_set` helpers (refined in 0.9.2 into the distinct Route A compatibility screen and Route B TOST APIs above).
+- **Publication plotting helpers:** Added package-level Matplotlib helpers `plot_forecast_vs_generation`, `plot_horizon_curve`, and `plot_reliability_diagram` to decouple manuscript/user plotting from raw analysis scripts.
+
 ## Changes in 0.9.0
 
 - **Domain-specific `custom_stats` hooks:** `sequence_diagnostics`, `posterior_predictive_checks`, and `audit_sequence_contexts` now accept an optional `custom_stats: dict[str, Callable]` mapping names to user-defined sequence statistics (`fn(sequences)` or `fn(sequences, mask)`). This cleanly separates the general categorical-sequence core audit layer (forecast scoring, calibration, paired starts, masked custom statistics) from built-in RNG/spatial extension summaries (distance distributions, recurrence gaps), allowing direct evaluation of task-specific outcomes such as advantageous deck share in the Iowa Gambling Task or cyclic upgrade rates in Rock-Paper-Scissors.
