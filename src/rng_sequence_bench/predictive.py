@@ -1,5 +1,7 @@
 """Posterior-predictive summaries for complete matched populations of sequences."""
 
+import warnings
+
 import numpy as np
 from scipy.spatial.distance import jensenshannon
 from scipy.stats import wasserstein_distance
@@ -193,59 +195,39 @@ def posterior_predictive_checks(
     return output
 
 
-def mc_ranking_probability(
-    discrepancies_a,
-    discrepancies_b,
-    *,
-    target_prob=0.95,
-    paired=True,
-):
-    """Estimate P(D_A < D_B) and MCSE from matched or independent simulations.
+def mc_ranking_probability(discrepancies_a, discrepancies_b, *, target_prob=0.95):
+    """Report the replicate win fraction and normal sign support for the paired mean.
 
-    When ``paired=True`` (common random streams), variance uses the paired
-    replicate differences ``delta_r = D_{A,r} - D_{B,r}``. When ``paired=False``
-    (independent random streams), variance uses uncoupled replicate means
-    ``Var(D_A)/len(A) + Var(D_B)/len(B)`` so unpaired runs never borrow paired
-    variance reduction.
+    Uses the paired difference ``delta_r = D_{A,r} - D_{B,r}`` across ``R``
+    replicates so shared random streams are accounted for in the variance.
     """
     a = np.asarray(discrepancies_a, dtype=float)
     b = np.asarray(discrepancies_b, dtype=float)
-    if a.ndim != 1 or b.ndim != 1 or len(a) < 2 or len(b) < 2:
-        raise ValueError("Provide 1-D discrepancy arrays with at least 2 replicates each")
-    if not (np.isfinite(a).all() and np.isfinite(b).all()):
-        raise ValueError("Discrepancy arrays must be finite")
+    if a.ndim != 1 or a.shape != b.shape or len(a) < 2 or not (np.isfinite(a).all() and np.isfinite(b).all()):
+        raise ValueError("Provide paired 1-D discrepancy arrays with at least 2 replicates")
+    if not 0.5 < target_prob < 1:
+        raise ValueError("target_prob must be strictly between 0.5 and 1")
+    diff = a - b
+    mean_diff = float(diff.mean())
+    mcse = float(diff.std(ddof=1) / np.sqrt(len(diff)))
+    prob_a_better = float(np.mean(diff < 0))
     from scipy.stats import norm
-
-    if paired:
-        if a.shape != b.shape:
-            raise ValueError("Paired MC ranking requires identical replicate array shapes")
-        diff = a - b
-        mean_diff = float(diff.mean())
-        sd_eff = float(diff.std(ddof=1))
-        mcse = float(sd_eff / np.sqrt(len(diff)))
-        prob_a_better = float(np.mean(diff < 0))
-        replicates = int(len(diff))
-    else:
-        mean_diff = float(a.mean() - b.mean())
-        var_sum = float(a.var(ddof=1) / len(a) + b.var(ddof=1) / len(b))
-        mcse = float(np.sqrt(var_sum))
-        sd_eff = float(mcse * np.sqrt(min(len(a), len(b))))
-        prob_a_better = float(norm.cdf(-mean_diff / mcse)) if mcse > 0 else float(mean_diff < 0)
-        replicates = int(min(len(a), len(b)))
-    normal_prob = float(norm.cdf(-mean_diff / mcse)) if mcse > 0 else float(mean_diff < 0)
+    normal_prob = float(norm.cdf(-mean_diff / mcse)) if mcse > 0 else float(mean_diff < 0) + .5 * (mean_diff == 0)
     z_req = float(norm.ppf(target_prob))
     recommended_r = (
-        int(np.ceil((z_req * sd_eff / abs(mean_diff)) ** 2))
-        if abs(mean_diff) > 0 and sd_eff > 0
+        int(np.ceil((z_req * diff.std(ddof=1) / abs(mean_diff)) ** 2))
+        if abs(mean_diff) > 0 and diff.std(ddof=1) > 0
         else None
     )
     return {
-        "paired": bool(paired),
-        "replicates": replicates,
+        "replicates": int(len(diff)),
         "mean_difference": mean_diff,
-        "mcse": mcse,
-        "paired_mcse": mcse if paired else None,
+        "paired_mcse": mcse,
         "ci95_mc": [mean_diff - 1.96 * mcse, mean_diff + 1.96 * mcse],
+        "empirical_win_rate": prob_a_better,
+        "tie_rate": float(np.mean(diff == 0)),
+        "normal_sign_support_for_mean": normal_prob,
+        # Historical output keys are aliases of the two distinct estimands.
         "empirical_prob_a_better": prob_a_better,
         "normal_approx_prob_a_better": normal_prob,
         "recommended_replicates": recommended_r,
@@ -253,51 +235,51 @@ def mc_ranking_probability(
 
 
 def adequacy_set(observed_ci, model_values, *, margin=0.0):
-    """Descriptive reference-band screen: models whose medians lie in observed CI.
+    """Descriptive reference-band screen: models inside observed interval (+/- margin).
 
-    This is a descriptive empirical reference-band check, not a formal TOST
-    equivalence test or overall multidimensional adequacy verdict.
+    Note: Comparing model replicate medians against an observed participant-bootstrap
+    interval is a descriptive reference-band screen, not a calibrated frequentist
+    hypothesis test. Use ``reference_band_screen`` for full replicate quantiles,
+    observed percentile location, and optional predictive-interval margin screens against a
+    prespecified practical discrepancy margin.
     """
     lo, hi = float(observed_ci[0]) - float(margin), float(observed_ci[1]) + float(margin)
-    if lo > hi:
-        raise ValueError("observed_ci lower bound must not exceed upper bound")
-    within = [name for name, val in model_values.items() if lo <= float(val) <= hi]
-    outside = [name for name, val in model_values.items() if not (lo <= float(val) <= hi)]
     return {
-        "screen_type": "descriptive_reference_band",
         "bounds": [lo, hi],
-        "within_band": within,
-        "outside_band": outside,
+        "inside_reference_band": [name for name, val in model_values.items() if lo <= float(val) <= hi],
+        "outside_reference_band": [name for name, val in model_values.items() if not (lo <= float(val) <= hi)],
     }
 
 
-def predictive_compatibility_screen(
+def reference_band_screen(
     observed_value,
     observed_ci,
     replicated_values,
     *,
-    compatibility_margin=None,
+    practical_margin=None,
 ):
-    """Route A: Descriptive reference band + simulation predictive compatibility.
+    """Report predictive distribution, descriptive reference-band screen, and optional margin screen.
 
-    Examines two simulation-distribution properties across ``R`` generated
-    populations: (1) whether the simulated median lies inside the observed
-    participant-bootstrap 95% reference band (``within_reference_band``), and
-    (2) whether the 95% simulation predictive discrepancy interval
-    ``[Q_0.025(reps - obs), Q_0.975(reps - obs)]`` falls inside
-    ``[-compatibility_margin, +compatibility_margin]``.
-
-    Note: ``difference_ci95`` is a predictive distribution interval across
-    simulated cohorts, NOT a sampling confidence interval or frequentist TOST
-    on the population discrepancy parameter. Use ``tost_equivalence_test`` or
-    ``tost_from_estimate`` for inferential TOST equivalence testing.
+    Parameters
+    ----------
+    observed_value : float
+        Observed cohort summary statistic.
+    observed_ci : sequence of two floats
+        Observed participant-bootstrap 95% interval (descriptive reference band).
+    replicated_values : 1-D array-like
+        Summary statistic evaluated across ``R`` simulated populations.
+    practical_margin : float or None, optional
+        Prespecified descriptive discrepancy margin ``delta > 0``. When provided,
+        ``predictive_interval_within_margin`` is True only if the entire 95% interval
+        of simulated cohort-level discrepancies lies within ``[-delta, +delta]``.
+        This is a predictive-distribution screen conditional on the supplied fitted
+        model and simulation design. It is NOT a confidence interval for a population
+        mean difference and is NOT a TOST or a frequentist equivalence test.
     """
     obs = float(observed_value)
     lo, hi = float(observed_ci[0]), float(observed_ci[1])
     if lo > hi:
         raise ValueError("observed_ci lower bound must not exceed upper bound")
-    if not (np.isfinite(obs) and np.isfinite(lo) and np.isfinite(hi)):
-        raise ValueError("Observed value and interval bounds must be finite")
     reps = np.asarray(replicated_values, dtype=float)
     if reps.ndim != 1 or len(reps) < 2 or not np.isfinite(reps).all():
         raise ValueError("Provide a finite 1-D array with at least 2 replicate values")
@@ -309,7 +291,6 @@ def predictive_compatibility_screen(
     diff_ci95 = np.quantile(diffs, [0.025, 0.975]).tolist()
     obs_pct = float(np.mean(reps <= obs))
     out = {
-        "screen_type": "simulation_predictive_compatibility",
         "observed": obs,
         "observed_reference_band_95": [lo, hi],
         "replicates": int(len(reps)),
@@ -323,209 +304,16 @@ def predictive_compatibility_screen(
         "within_reference_band": bool(lo <= med <= hi),
         "interval_overlaps_reference_band": bool(ci95[1] >= lo and ci95[0] <= hi),
     }
-    if compatibility_margin is not None:
-        delta = float(compatibility_margin)
+    if practical_margin is not None:
+        delta = float(practical_margin)
         if delta <= 0 or not np.isfinite(delta):
-            raise ValueError("compatibility_margin must be a finite positive float")
-        out["compatibility_margin"] = delta
-        out["compatible_within_margin"] = bool(diff_ci95[0] >= -delta and diff_ci95[1] <= delta)
-    return out
-
-
-def reference_band_screen(
-    observed_value,
-    observed_ci,
-    replicated_values,
-    *,
-    compatibility_margin=None,
-):
-    """Backward-named Route A wrapper around ``predictive_compatibility_screen``."""
-    return predictive_compatibility_screen(
-        observed_value,
-        observed_ci,
-        replicated_values,
-        compatibility_margin=compatibility_margin,
-    )
-
-
-def tost_from_estimate(
-    estimate,
-    se,
-    *,
-    margin,
-    df=None,
-    alpha=0.05,
-    mcse=0.0,
-    inference_basis="estimate_se",
-):
-    """Route B: Genuine frequentist Two One-Sided Tests (TOST) for equivalence.
-
-    Tests ``H0: theta <= -margin or theta >= +margin`` against
-    ``H1: -margin < theta < +margin`` at one-sided level ``alpha``,
-    equivalently checking whether the ``(1 - 2*alpha)`` (90% when ``alpha=0.05``)
-    inferential confidence interval lies strictly inside ``(-margin, +margin)``.
-
-    ``se`` represents participant sampling (and, where estimated by refit,
-    parameter) uncertainty; optional ``mcse`` captures finite-replicate Monte
-    Carlo error and is propagated as ``effective_se = hypot(se, mcse)``.
-    """
-    est = float(estimate)
-    se_val = float(se)
-    mcse_val = float(mcse)
-    delta = float(margin)
-    alpha_val = float(alpha)
-    if not (np.isfinite(est) and np.isfinite(se_val) and np.isfinite(mcse_val)):
-        raise ValueError("estimate, se, and mcse must be finite")
-    if se_val < 0 or mcse_val < 0:
-        raise ValueError("se and mcse must be non-negative")
-    if not np.isfinite(delta) or delta <= 0:
-        raise ValueError("margin must be a finite positive float")
-    if not np.isfinite(alpha_val) or not (0.0 < alpha_val < 0.5):
-        raise ValueError("alpha must lie strictly between 0 and 0.5")
-    if df is not None and (not np.isfinite(float(df)) or float(df) <= 0):
-        raise ValueError("df must be positive when provided")
-
-    from scipy.stats import norm, t as student_t
-
-    eff_se = float(np.hypot(se_val, mcse_val))
-    dist_obj = student_t(float(df)) if df is not None else norm
-    crit = float(dist_obj.ppf(1.0 - alpha_val))
-
-    if eff_se == 0.0:
-        p_lower = 0.0 if est > -delta else 1.0
-        p_upper = 0.0 if est < delta else 1.0
-        ci_low, ci_high = est, est
-    else:
-        t_lower = (est + delta) / eff_se
-        t_upper = (delta - est) / eff_se
-        p_lower = float(dist_obj.sf(t_lower))
-        p_upper = float(dist_obj.sf(t_upper))
-        ci_low = est - crit * eff_se
-        ci_high = est + crit * eff_se
-
-    p_tost = float(max(p_lower, p_upper))
-    equivalent = bool(p_tost < alpha_val and ci_low > -delta and ci_high < delta)
-    mcse_ratio = float(mcse_val / delta)
-    mcse_warn = bool(mcse_val > 0.10 * delta and (se_val == 0.0 or mcse_val > 0.25 * se_val))
-    return {
-        "screen_type": "tost_equivalence",
-        "inference_basis": inference_basis,
-        "estimate": est,
-        "sampling_se": se_val,
-        "mcse": mcse_val,
-        "effective_se": eff_se,
-        "df": None if df is None else float(df),
-        "alpha": alpha_val,
-        "ci_level": 1.0 - 2.0 * alpha_val,
-        "ci_equivalence": [float(ci_low), float(ci_high)],
-        "margin": delta,
-        "p_lower": p_lower,
-        "p_upper": p_upper,
-        "p_tost": p_tost,
-        "equivalent": equivalent,
-        "mcse_to_margin_ratio": mcse_ratio,
-        "mcse_excessive": mcse_warn,
-    }
-
-
-def tost_equivalence_test(
-    *,
-    margin,
-    paired_differences=None,
-    bootstrap_diffs=None,
-    alpha=0.05,
-    mcse=0.0,
-):
-    """Route B: Run genuine statistical TOST from paired data or bootstrap draws.
-
-    Exactly one of ``paired_differences`` or ``bootstrap_diffs`` must be
-    supplied:
-      - ``paired_differences``: length-``N`` vector of participant-level
-        differences ``d_i = s_i^{sim} - s_i^{obs}`` tested via one-sample
-        paired ``t``-TOST with ``df = N - 1``.
-      - ``bootstrap_diffs``: length-``B`` vector of participant-bootstrap (or
-        bootstrap-refit) population discrepancy draws
-        ``theta_b = S(Y^{sim,(b)}) - S(Y^{obs,(b)})`` tested via ``(1-2*alpha)``
-        bootstrap percentile + MCSE-propagated TOST.
-    """
-    if (paired_differences is None) == (bootstrap_diffs is None):
-        raise ValueError("Supply exactly one of paired_differences or bootstrap_diffs")
-    delta = float(margin)
-    alpha_val = float(alpha)
-    mcse_val = float(mcse)
-    if not np.isfinite(delta) or delta <= 0:
-        raise ValueError("margin must be a finite positive float")
-    if not np.isfinite(alpha_val) or not (0.0 < alpha_val < 0.5):
-        raise ValueError("alpha must lie strictly between 0 and 0.5")
-    if not np.isfinite(mcse_val) or mcse_val < 0:
-        raise ValueError("mcse must be non-negative and finite")
-
-    if paired_differences is not None:
-        diffs = np.asarray(paired_differences, dtype=float)
-        if diffs.ndim != 1 or len(diffs) < 2 or not np.isfinite(diffs).all():
-            raise ValueError("paired_differences must be a finite 1-D array with N >= 2")
-        est = float(diffs.mean())
-        se = float(diffs.std(ddof=1) / np.sqrt(len(diffs)))
-        res = tost_from_estimate(
-            est,
-            se,
-            margin=delta,
-            df=len(diffs) - 1,
-            alpha=alpha_val,
-            mcse=mcse_val,
-            inference_basis="paired_participant_t",
+            raise ValueError("practical_margin must be a finite positive float")
+        out["practical_margin"] = delta
+        out["margin_screen_basis"] = "95% interval of simulated cohort-level discrepancies"
+        within = bool(diff_ci95[0] >= -delta and diff_ci95[1] <= delta)
+        outside = bool(diff_ci95[0] > delta or diff_ci95[1] < -delta)
+        out["predictive_interval_within_margin"] = within
+        out["practical_margin_status"] = (
+            "within" if within else ("outside" if outside else "indeterminate")
         )
-        res["participants"] = int(len(diffs))
-        return res
-
-    draws = np.asarray(bootstrap_diffs, dtype=float)
-    if draws.ndim != 1 or len(draws) < 20 or not np.isfinite(draws).all():
-        raise ValueError("bootstrap_diffs must be a finite 1-D array with at least 20 draws")
-    est = float(draws.mean())
-    boot_se = float(draws.std(ddof=1))
-    if mcse_val > 0.0:
-        if boot_se == 0.0:
-            # No participant variance observed; fall back to normal MCSE TOST interval.
-            res = tost_from_estimate(
-                est,
-                0.0,
-                margin=delta,
-                df=None,
-                alpha=alpha_val,
-                mcse=mcse_val,
-                inference_basis="bootstrap_plus_mcse",
-            )
-            res["bootstrap_draws"] = int(len(draws))
-            res["sampling_se"] = 0.0
-            return res
-        scale = float(np.hypot(boot_se, mcse_val) / boot_se)
-        adj_draws = est + scale * (draws - est)
-    else:
-        adj_draws = draws
-    eff_se = float(np.hypot(boot_se, mcse_val))
-    ci_lo, ci_hi = [float(x) for x in np.quantile(adj_draws, [alpha_val, 1.0 - alpha_val])]
-    p_lower = float(np.mean(adj_draws <= -delta))
-    p_upper = float(np.mean(adj_draws >= delta))
-    p_tost = float(max(p_lower, p_upper))
-    equivalent = bool(p_tost < alpha_val and ci_lo > -delta and ci_hi < delta)
-    mcse_ratio = float(mcse_val / delta)
-    mcse_warn = bool(mcse_val > 0.10 * delta and (boot_se == 0.0 or mcse_val > 0.25 * boot_se))
-    return {
-        "screen_type": "tost_equivalence",
-        "inference_basis": "participant_bootstrap_percentile",
-        "bootstrap_draws": int(len(draws)),
-        "estimate": est,
-        "sampling_se": boot_se,
-        "mcse": mcse_val,
-        "effective_se": eff_se,
-        "alpha": alpha_val,
-        "ci_level": 1.0 - 2.0 * alpha_val,
-        "ci_equivalence": [ci_lo, ci_hi],
-        "margin": delta,
-        "p_lower": p_lower,
-        "p_upper": p_upper,
-        "p_tost": p_tost,
-        "equivalent": equivalent,
-        "mcse_to_margin_ratio": mcse_ratio,
-        "mcse_excessive": mcse_warn,
-    }
+    return out

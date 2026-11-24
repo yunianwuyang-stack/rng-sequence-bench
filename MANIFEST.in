@@ -1,0 +1,7 @@
+include CITATION.cff CHANGELOG.md
+recursive-include examples *.py *.R
+recursive-include tests *.py
+include scripts/ppc_comparator_audit_r22.py
+include scripts/rps_missingness_sensitivity_r22.py
+prune build
+global-exclude *.pyc

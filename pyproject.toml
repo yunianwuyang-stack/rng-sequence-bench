@@ -1,11 +1,11 @@
 [build-system]
-requires = ["uv_build>=0.13,<0.14"]
-build-backend = "uv_build"
+requires = ["setuptools>=77", "wheel"]
+build-backend = "setuptools.build_meta"
 
 [project]
 name = "rng-sequence-bench"
-version = "0.9.2"
-description = "Conditional-order and chronological prediction benchmarks for categorical sequences"
+version = "1.0.1"
+description = "Model-agnostic workflow for auditing chronological forecasting and recursive generation in categorical choice sequences"
 readme = "README.md"
 requires-python = ">=3.11"
 license = "Apache-2.0"
@@ -14,15 +14,20 @@ dependencies = ["numpy>=1.24", "scipy>=1.11"]
 
 [project.optional-dependencies]
 plot = ["matplotlib>=3.8"]
-
-[project.urls]
-Repository = "https://github.com/yunianwuyang-stack/rng-sequence-bench"
-Issues = "https://github.com/yunianwuyang-stack/rng-sequence-bench/issues"
+analysis = ["pandas>=2.0"]
+dev = ["pytest>=8", "ruff>=0.9", "pandas>=2.0"]
 
 [project.scripts]
 rng-sequence-bench = "rng_sequence_bench.__main__:main"
 rng-chain-diagnostics = "rng_sequence_bench.diagnostics:main"
 rng-sequence-checks = "rng_sequence_bench.checks:main"
 
-[dependency-groups]
-dev = ["pytest>=8", "ruff>=0.9"]
+[tool.setuptools]
+package-dir = {"" = "src"}
+include-package-data = true
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+pythonpath = ["scripts"]

@@ -184,30 +184,72 @@ def audit_sequence_contexts(
     return report
 
 
-def check_forecast_causality(forecast, choices, fit_through, categories):
-    """Perturb the current and future responses at two holdout positions.
+def check_forecast_causality(forecast, choices, fit_through, categories, *,
+                             mode="two", n_positions=None, seed=0):
+    """Check forecast invariance through the first changed choice.
 
-    The callable must accept integer choices, keep the original fit boundary,
-    and return forecasts of all choices starting with choice index one. Forecast
-    entries made through the changed choice must stay identical within tolerance.
-    This checks those perturbations and does not inspect the estimator's internals.
+    The default checks two suffix blocks. In 'all' and 'random' modes one
+    position is changed at a time for all people by cycling its category.
+    The report enumerates the tested positions using one-based trial numbers.
     """
     y = np.asarray(choices)
-    if y.ndim != 2 or not 2 <= fit_through < y.shape[1] or categories < 2:
+    if (y.ndim != 2 or not y.size or not 2 <= fit_through < y.shape[1] or categories < 2
+            or not np.issubdtype(y.dtype, np.integer) or y.min() < 0 or y.max() >= categories):
         raise ValueError("Cannot perturb the requested holdout")
     reference = np.asarray(forecast(y))
-    if reference.shape != (len(y), y.shape[1] - 1, categories):
+    if reference.shape != (len(y), y.shape[1] - 1, categories) or not np.isfinite(reference).all():
         raise ValueError("Unexpected forecast dimensions")
-    changes = sorted({fit_through, (fit_through + y.shape[1]) // 2})
+    eligible = np.arange(fit_through, y.shape[1])
+    if mode == "random":
+        if not isinstance(n_positions, (int, np.integer)) or not 1 <= n_positions <= len(eligible):
+            raise ValueError("Choose between one and all holdout positions")
+        changes = sorted(np.random.default_rng(seed).choice(eligible, n_positions, replace=False))
+    elif mode == "all":
+        changes = eligible
+    elif mode == "two":
+        changes = sorted({fit_through, (fit_through + y.shape[1]) // 2})
+    else:
+        raise ValueError("mode must be 'two', 'all', or 'random'")
+    if mode != "random" and n_positions is not None:
+        raise ValueError("n_positions applies to random mode")
     for index in changes:
         copy = y.copy()
-        copy[:, index:] = (copy[:, index:] + 1) % categories
+        changed_slice = slice(index, None) if mode == "two" else slice(index, index + 1)
+        copy[:, changed_slice] = (copy[:, changed_slice].astype(np.int64) + 1) % categories
         changed = np.asarray(forecast(copy))
         if changed.shape != reference.shape or not np.allclose(
             reference[:, :index], changed[:, :index], rtol=0, atol=1e-12
         ):
             raise ValueError(f"Forecast depends on responses at or after trial {index + 1}")
-    return {"altered_trials": [index + 1 for index in changes]}
+    return {"altered_trials": [int(index) + 1 for index in changes], "holdout_positions": len(eligible),
+            "mode": mode, "seed": int(seed) if mode == "random" else None,
+            "scope": "Finite perturbations of the supplied forecast callback with its fitted state held fixed."}
+
+
+def check_prefix_preprocessing(prepare, choices, fit_through):
+    """Compare deterministic fitted preprocessing state with and without the suffix.
+
+    prepare(data, cutoff) returns a dictionary of numeric arrays or scalar labels
+    for scaling, selected features and tuning choices. Only returned state is checked.
+    """
+    y = np.asarray(choices)
+    if y.ndim != 2 or not 1 <= fit_through < y.shape[1]:
+        raise ValueError("Choose an interior prefix cutoff")
+    prefix = prepare(y[:, :fit_through].copy(), fit_through)
+    full = prepare(y.copy(), fit_through)
+    if not isinstance(prefix, dict) or not prefix or not isinstance(full, dict) or prefix.keys() != full.keys():
+        raise ValueError("Preprocessing state must expose identical named fields")
+    for key, value in prefix.items():
+        a, b = np.asarray(value), np.asarray(full[key])
+        if a.shape != b.shape:
+            raise ValueError(f"Preprocessing differs with suffix present: {key}")
+        if a.dtype.kind in "iufc" and b.dtype.kind in "iufc":
+            equal = np.isfinite(a).all() and np.isfinite(b).all() and np.allclose(a,b,atol=1e-12,rtol=0)
+        else:
+            equal = np.array_equal(a, b)
+        if not equal:
+            raise ValueError(f"Preprocessing differs with suffix present: {key}")
+    return {"fit_through": fit_through, "checked_fields": sorted(prefix)}
 
 
 def rolling_forecasts(choices, fit_forecast, origins, width, *, categories, seed=0):

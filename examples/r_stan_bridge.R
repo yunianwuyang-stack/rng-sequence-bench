@@ -1,4 +1,4 @@
-# Minimal R -> Python bridge example for RNG Sequence Bench (v0.9.2)
+# Minimal R -> Python bridge example for RNG Sequence Bench (v1.0.1)
 # Demonstrates exporting model forecasts and paired simulated suffixes from R
 # (e.g., fitted with rstan, brms, cmdstanr, or samplr) for auditing in Python.
 #
@@ -27,7 +27,7 @@ write.csv(probs_df, file.path(out_dir, "forecasts.csv"), row.names = FALSE)
 suffix_len <- T_len - cut
 for (r in seq_len(R_rep)) {
   reset_s <- matrix(sample(0:(K - 1), N * suffix_len, replace = TRUE), nrow = N)
-  pref_s  <- matrix(sample(0:(K - 1), N * suffix_len, replace = TRUE), nrow = N)
+  pref_s  <- reset_s  # The uniform model ignores history, so shared uniforms produce identical paths.
   write.csv(reset_s, file.path(out_dir, sprintf("reset_%03d.csv", r)), row.names = FALSE)
   write.csv(pref_s,  file.path(out_dir, sprintf("prefix_%03d.csv", r)), row.names = FALSE)
 }
